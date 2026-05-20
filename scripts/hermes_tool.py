@@ -1,11 +1,16 @@
-# Hermes Agent — netcheck 工具集成
+# Hermes Agent tool — netcheck integration
+# Copy to ~/.hermes/tools/netcheck.py to register as a tool.
+# When Agent encounters network failures (curl/pip/git timeout),
+# it auto-calls netcheck to diagnose direct vs proxy connectivity.
 #
-# 将此文件放到 ~/.hermes/tools/netcheck.py，Hermes 自动发现为工具。
-# 安装: cp scripts/netcheck_tool.py ~/.hermes/tools/netcheck.py
+# Installation:
+#   cp scripts/hermes_tool.py ~/.hermes/tools/netcheck.py
 #
-# Agent 使用方式：
-#   1. 自动触发：curl/pip/git 失败时，Agent 知道可以调 netcheck 判断
-#   2. 手动触发：用户说"检测网络"或"试试代理"
+# Usage in Agent context:
+#   Agent: "Download failed. Let me check connectivity..."
+#   -> netcheck(url="https://huggingface.co")
+#   <- "Direct FAILED. Must use proxy: http://172.31.112.1:7897"
+#   Agent: "Enabling proxy and retrying..."
 
 import json
 import subprocess
@@ -43,8 +48,8 @@ def handler(url: str, timeout: int = 10) -> str:
 
     if not os.path.exists(netcheck_bin):
         return (
-            "netcheck script not found at ~/.local/bin/netcheck\n"
-            "Install: curl -sL https://raw.githubusercontent.com/USER/hermes-network-watchdog/main/install.sh | bash"
+            "netcheck script not found. Install with:\n"
+            "curl -sL https://github.com/USER/hermes-network-watchdog/raw/main/install.sh | bash"
         )
 
     timeout = min(timeout or 10, 30)
@@ -56,39 +61,29 @@ def handler(url: str, timeout: int = 10) -> str:
             env={**os.environ, "LC_ALL": "C"},
         )
     except subprocess.TimeoutExpired:
-        return "netcheck timed out — both direct and proxy unreachable within time limit."
+        return "netcheck timed out — both routes unreachable."
 
     output = r.stdout
-
-    # Parse results
     direct_ok = "直连:" in output and "✓" in output
     proxy_ok = "代理:" in output and "✓" in output
 
-    # Extract proxy URL for display
     proxy_url = "unknown"
     for line in output.split("\n"):
         if "代理:" in line and "://" in line:
-            parts = line.split()
-            for p in parts:
+            for p in line.split():
                 if "://" in p:
                     proxy_url = p
                     break
 
     if direct_ok and proxy_ok:
-        return f"Both routes reachable for {url}. Direct preferred (lower latency typically)."
+        return f"Both routes reachable for {url}. Direct preferred."
     elif direct_ok and not proxy_ok:
-        return f"Direct connection OK for {url}. No proxy needed. Proxy seems down — check proxy service."
+        return f"Direct OK for {url}. Proxy seems down — check proxy service."
     elif not direct_ok and proxy_ok:
-        return (
-            f"Direct connection FAILED for {url}. Must use proxy: {proxy_url}\n"
-            f"To enable proxy: proxy on"
-        )
+        return f"Direct FAILED for {url}. Use proxy: {proxy_url}\nTo enable: proxy on"
     else:
         return (
-            f"Both direct and proxy FAILED for {url}.\n"
-            f"Troubleshooting:\n"
-            f"  1. Is the proxy service running?\n"
-            f"  2. Is {url} itself down? Try a different site.\n"
-            f"  3. DNS issue? Try: nslookup {url}\n"
-            f"  4. Set proxy manually: PROXY_PORT=1080 proxy on"
+            f"Both routes FAILED for {url}.\n"
+            f"Troubleshooting: 1) proxy service running? 2) site down? 3) DNS?\n"
+            f"Manual: PROXY_PORT=1080 proxy on"
         )

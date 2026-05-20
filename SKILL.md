@@ -2,6 +2,10 @@
 name: network-proxy-watchdog
 description: Smart network proxy detection & auto-decision. Compares direct vs proxy connectivity, auto-switches when sites are unreachable. Supports any HTTP/SOCKS5 proxy (Clash, v2ray, SSR, Sing-box, etc.)
 category: devops
+metadata:
+  hermes:
+    tags: [proxy, network, connectivity, download, wsl, china-gfw]
+    related_skills: [hermes-agent-skill-authoring]
 triggers:
   - download slow, download failed, network timeout
   - website/API unreachable
@@ -12,155 +16,238 @@ triggers:
 
 # Network Proxy Watchdog
 
-3-layer architecture: manual detection → command wrappers → cron watchdog
+Smart proxy detection & auto-decision. 5-layer architecture that gets faster with each layer.
 
-## Quick Install (30 seconds)
+## ⚡ One-Click Install
+
+**From local skill directory:**
+```bash
+bash ~/.hermes/skills/devops/network-proxy-watchdog/install.sh
+source ~/.bash_aliases
+```
+
+**From GitHub (fresh install):**
+```bash
+git clone https://github.com/yuyuanzi001/hermes-network-watchdog /tmp/nwd
+bash /tmp/nwd/install.sh
+source ~/.bash_aliases
+```
+
+This installs everything: `netcheck` CLI, route table, bash functions (proxy/spip/sgclone/…), and the MCP server. See the printed instructions for optional MCP registration.
+
+After install, restart Hermes if you want the MCP tool (`mcp_netcheck_netcheck`).
+
+---
+
+## ⚡ Agent Network Protocol (MANDATORY — v3)
+
+**You MUST call `agent-check <domain>` before ANY external network operation.**
+
+### Decision Flow
+```
+agent-check <domain> → JSON decision (0ms-2s):
+  "direct"  → proceed normally
+  "proxy"   → proxy on → execute → proxy pop (restore original state)
+  "blocked" → TELL USER: "需要代理访问 <domain>，请先 proxy on"
+```
+
+### Triggers
+ANY of these operations trigger the protocol:
+- `terminal` running `curl`, `wget`, `git clone/pull`, `pip install`, `npm install`, `apt install`
+- `browser_navigate` to external URL
+- Any HTTP request to non-localhost domains
+
+### Post-Failure Recovery
+If a network operation FAILS:
+1. Run `agent-check <domain>` on the failed domain
+2. If "blocked" → tell user to enable proxy, then retry
+3. If "direct" but still fails → report error to user
+4. NEVER retry same operation without changing proxy state
+
+### NEVER skip this protocol. No exceptions.
+
+### Proxy State
+Agent can read proxy status: `cat ~/.hermes/.proxy_state` → `"on"` or `"off"`
+Recent heartbeat: check `~/.hermes/.proxy_heartbeat` timestamp (within 120s = alive)
+
+---
+
+## Architecture (v3 — agent-aware, 0ms-2s decision)
+
+```
+L0: Route Table (~110 domain patterns) → ~/.hermes/network-routes.yaml  (0ms)
+L1: TCP Probe                        → agent-check / netcheck          (<2s)
+L2: HTTP Fallback                    → full HTTP connectivity test     (<10s, reserved)
+L3: Smart Wrappers                   → spip/sgclone/swget/scurl        (push/pop safe)
+L4: Proxy Heartbeat + Wake Guard     → automated health monitoring     (30s cron)
+L5: MCP Tool                         → mcp_netcheck_netcheck           (agent native)
+```
+
+---
+
+## L0: Route Table
+
+File: `~/.hermes/network-routes.yaml`
+
+Domains matched here are decided instantly — no 10s wait.
+
+| Category | Examples | Action |
+|----------|----------|--------|
+| Blocked (CN) | huggingface.co, *.hf.co, raw.githubusercontent.com, *.gradio.live, arxiv.org | `always_proxy` |
+| Domestic | *.cn, baidu.com, *.aliyun.com, *.bilibili.com | `always_direct` |
+| Local | 127.*, 192.168.*, 10.*, localhost | `always_direct` |
+| Everything else | github.com, pypi.org, ... | `auto` (live check) |
+
+Query from CLI: `netcheck-route <domain>`
+
+Edit the file to add domains you discover. Cache at `~/.hermes/cache/netcheck/` (10min TTL).
+
+---
+
+## L5: MCP Tool
+
+After `install.sh` + config.yaml registration + Hermes restart:
+
+```
+mcp_netcheck_netcheck(url="github.com")
+→ {"recommendation": "proxy", "action": "Direct FAILED. Use proxy. Run: proxy on"}
+```
+
+Without MCP, the agent falls back to `terminal` + `netcheck`. Both work.
+
+---
+
+## L2: CLI
 
 ```bash
-# 1. Install bc (optional, for speed comparison)
-sudo apt install bc -y   # Debian/Ubuntu
-# brew install bc        # macOS
-
-# 2. Download netcheck script
-mkdir -p ~/.local/bin
-curl -o ~/.local/bin/netcheck https://raw.githubusercontent.com/yuyuanzi001/hermes-network-watchdog/main/scripts/netcheck.sh
-chmod +x ~/.local/bin/netcheck
-
-# 3. Add to PATH (add to ~/.bashrc or ~/.zshrc)
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-source ~/.bashrc
-
-# 4. Test
-netcheck https://github.com
+netcheck huggingface.co   # instant (route table)
+netcheck -t 5 unknown.xyz # 10s live test
+netcheck -s large.bin     # speed comparison mode
 ```
+
+---
+
+## L3: Smart Wrappers (push/pop safe)
+
+Available after `source ~/.bash_aliases`:
+
+```bash
+spip install torch        # auto-detects pypi.org → proxy if needed → restores state
+sgclone https://github.com/user/repo.git
+swget https://example.com/file.tar.gz
+scurl https://api.example.com/data
+proxy on|off|status|push|pop
+```
+
+Push/pop ensures: even if a wrapper enables proxy for a download, your next command uses whatever proxy state you had before. No pollution.
+
+---
 
 ## Proxy Configuration
 
-All proxy settings are environment variables. **No hardcoded values.**
+All via environment variables. No hardcoded values.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PROXY_URL` | (auto) | Full proxy URL, e.g. `http://127.0.0.1:7897` or `socks5://127.0.0.1:1080` |
-| `PROXY_HOST` | Auto-detect | Proxy host (WSL: Windows host IP; others: 127.0.0.1) |
+| `PROXY_URL` | (auto) | Full proxy URL |
+| `PROXY_HOST` | Auto-detect | WSL: Windows host IP; others: 127.0.0.1 |
 | `PROXY_PORT` | 7897 | Proxy port |
-| `PROXY_PROTO` | http | Protocol: `http` or `socks5` |
+| `PROXY_PROTO` | http | http or socks5 |
 
-**Supported proxy software** (any HTTP/SOCKS5-compatible):
+Supports Clash, v2rayN, SSR, Sing-box, or any HTTP/SOCKS5 proxy.
 
-| Software | Typical Config |
-|----------|---------------|
-| Clash / Clash Verge | `PROXY_PORT=7897` |
-| v2rayN | `PROXY_PORT=10809` |
-| SSR / Shadowsocks | `PROXY_PORT=1080` |
-| Sing-box | `PROXY_PORT=2080` |
-| Trojan | `PROXY_PORT=1080` |
-| Any HTTP proxy | `PROXY_URL=http://host:port` |
-| Any SOCKS5 proxy | `PROXY_URL=socks5://host:port` |
+---
 
-## L1: Manual Detection — `netcheck <url>`
+## File Index (inside skill directory)
 
+| File | Purpose |
+|------|---------|
+| `install.sh` | One-click deployment |
+| `scripts/netcheck.sh` | CLI connectivity checker → installed to ~/.local/bin/netcheck |
+| `scripts/netcheck-route` | Route table lookup → installed to ~/.local/bin/netcheck-route |
+| `scripts/netcheck_mcp_server.py` | MCP stdio server → installed to ~/.hermes/tools/ |
+| `scripts/netcheck_tool.py` | Standalone Python wrapper |
+| `scripts/agent-check.sh` | Agent auto-detection protocol (v3) → installed to ~/.local/bin/agent-check |
+| `scripts/proxy-heartbeat.sh` | Proxy health monitor (v3) → installed to ~/.local/bin/proxy-heartbeat |
+| `scripts/wake-guard.sh` | Sleep-wake recovery guard (v3) → installed to ~/.local/bin/wake-guard |
+| `scripts/smart_wrappers.sh` | Standalone bash wrappers (alternative to install.sh embed) |
+| `scripts/hermes_tool.py` | Hermes MCP tool adapter |
+| `templates/network-routes.yaml` | Default route table → installed to ~/.hermes/ |
+| `references/compatibility.md` | Test results and known quirks |
+| `references/code-review-2026-05-19.md` | Initial code review report (v2, round 1) |
+| `references/code-review-2026-05-19-r2.md` | Round 2 code review — v3 hardening details |
+| `references/code-review-round2-2026-05-19.md` | Cumulative review history — R1→R4 findings, all fixes & repair records |
+
+---
+
+## Changelog
+
+**v3.3 (2026-05-20):** Round 4 code review — ALL CLEAN ✅ 18/18 fixes verified, zero regressions. Minor: merged duplicate File Index entry in SKILL.md.
+
+**v3.2 (2026-05-20):** Round 3 code review — fixed R2 regression in agent-check.sh route exit code handling, removed duplicate entries from network-routes.yaml, documented `set -uo` design for source scripts. See `references/code-review-round2-2026-05-19.md`.
+
+**v3.1 (2026-05-19):** Round 2 code review fixes — route table exit code handling, TCP fallback to port 80, proxy URL `##*@` parsing, swget URL arg detection, wake-guard log isolation. See `references/code-review-2026-05-19-r2.md`.
+
+**v3.0 (2026-05-19):** Agent auto-detection protocol (`agent-check`), proxy heartbeat monitoring (`proxy-heartbeat`), wake-from-sleep recovery (`wake-guard`), push/pop-safe smart wrappers, 5-layer architecture (L0-L5), MCP tool integration.
+
+**v2.1 (2026-05-19):** Fixed curl exitcode bug (`$?` instead of fake `%{exitcode}`). Cleaned duplicate condition in MCP server parser. Added English output fallback.
+
+**v2.0 (2026-05-19):** Route table (L0), MCP tool (L1), push/pop wrappers (L3), self-contained install.sh, 5-layer architecture.
+
+---
+
+## Pitfalls (lessons from code review)
+
+These were real bugs found by Claude Code review. Avoid reintroducing them.
+
+### Route table exit codes
+`netcheck-route` returns exit code 2 when the YAML is corrupted. **Never** use `|| true` after the route lookup — it silently turns parse errors into "no match" fallthroughs. Capture `$?` explicitly:
 ```bash
-# Basic usage
-netcheck https://huggingface.co
-netcheck https://github.com/user/repo/releases/download/v1.0/model.bin
-
-# Custom timeout (default 10s)
-netcheck -t 5 https://api.openai.com
-
-# Speed comparison mode (downloads first 1MB)
-netcheck -s https://huggingface.co/model.bin
-
-# With custom proxy config
-PROXY_PORT=1080 netcheck https://example.com
-PROXY_URL=socks5://127.0.0.1:1080 netcheck -s https://huggingface.co/file.bin
+ROUTE_ACTION=$(netcheck-route "$HOST" 2>/dev/null); route_exit=$?
+if [[ $route_exit -eq 2 ]]; then
+    echo "⚠ Route table parse error, falling through to live check" >&2
+elif [[ "$ROUTE_ACTION" == "always_proxy" ]]; then ...
 ```
 
-Sample output:
-```
-═══ netcheck: huggingface.co ═══
-  代理: http://172.31.112.1:7897
-
-  直连: ✗ 超时 (10s)
-  代理: ✓ 连通 0.230s
-
-→ 建议: 开启代理（直连不通，代理可用）
-  设置: export http_proxy=http://172.31.112.1:7897
-```
-
-Decision rules:
-
-| Direct | Proxy | Action |
-|--------|-------|--------|
-| ✓ Fast | - | Keep direct |
-| ✓ Slow | ✓ Faster | Switch to proxy |
-| ✗ Down | ✓ OK | **Switch to proxy** |
-| ✗ Down | ✗ Down | Both dead — troubleshoot |
-| ✓ OK | ✗ Down | Direct OK, check proxy service |
-
-## L2: Smart Command Wrappers
-
-Add to `~/.bashrc` or `~/.bash_aliases`:
-
+### TCP probe must try port 80
+443-only probing misses HTTP-only sites (e.g., plain HTTP APIs, dev servers). Always fall back to port 80:
 ```bash
-source <(curl -s https://raw.githubusercontent.com/yuyuanzi001/hermes-network-watchdog/main/scripts/smart_wrappers.sh)
+tcp_probe "$HOST" 443 2 || tcp_probe "$HOST" 80 2
 ```
 
-Or copy manually — wrapper functions that auto-enable proxy when direct connection fails:
+### URL parsing: use `##*@` (longest match), not `#*@`
+If a proxy password contains `@` (e.g., `user:p@ss@host:port`), `${url#*@}` only strips up to the first `@`, leaving part of the password in the host string. Use `${url##*@}` to strip everything up to the LAST `@`.
 
-| Command | Replaces | Behavior |
-|---------|----------|----------|
-| `spip` | `pip install` | Checks pypi.org → proxy if needed |
-| `sgclone` | `git clone` | Checks target host → proxy if needed |
-| `swget` | `wget` | Checks target host → proxy if needed |
-| `scurl` | `curl` | Checks target host → proxy if needed |
-| `proxy on/off/status` | — | Toggle proxy on/off, show status |
-
-## L3: Cron Watchdog (Hermes Agent only)
-
+### Smart wrapper URL detection
+`swget` must iterate all arguments to find the URL, not assume it's the last one. `-O` flag reorders arguments. Follow the same pattern as `scurl`:
 ```bash
-cronjob create \
-  --name "Network Watchdog" \
-  --schedule "*/15 * * * *" \
-  --script "netcheck --cron" \
-  --no_agent
+for arg in "$@"; do
+    [[ "$arg" =~ ^https?:// ]] && { url="$arg"; break; }
+done
 ```
 
-Silently checks critical sites. Only notifies when connectivity changes.
-
-## Architecture Notes
-
-```
-┌─────────────────────────────────────────────┐
-│ L1: netcheck <url>                           │
-│     Manual dual-path connectivity test       │
-│     curl direct vs curl --proxy               │
-│     → Prints decision + recommended action   │
-├─────────────────────────────────────────────┤
-│ L2: spip / sgclone / swget / scurl           │
-│     Auto-detect target host connectivity      │
-│     → proxy on if needed, then execute       │
-├─────────────────────────────────────────────┤
-│ L3: Cron watchdog                             │
-│     Periodic silent check of critical sites  │
-│     → Alert only when state changes          │
-└─────────────────────────────────────────────┘
+### Log statements in `&&`/`||` chains
+Never chain `command && log "ok" || log "fail"` — if `log "ok"` itself fails (disk full), it triggers the "fail" branch. Capture the result first:
+```bash
+hb_ok=false
+if check_heartbeat; then hb_ok=true; fi
+$hb_ok && log "ok" || log "fail"
 ```
 
-## Cross-Platform Support
+### Route table header
+Don't claim specific domain counts in YAML headers — they get stale. Use approximate language ("~110 unique domain patterns") and validate periodically.
 
-| Environment | Auto-Detection | Notes |
-|-------------|---------------|-------|
-| WSL2 | ✓ Windows host IP via `ip route` | Default setup |
-| Linux native | ✓ 127.0.0.1 | Set PROXY_HOST if different |
-| macOS | ✓ 127.0.0.1 | Set PROXY_HOST if different |
-| Docker | ✓ 127.0.0.1 | Use host.docker.internal if needed |
-| Any shell | ✓ Via PROXY_URL env | Full manual control |
+### `set -euo pipefail` only for executable scripts
+Scripts that are `source`d (like `smart_wrappers.sh`) must NOT use `set -e` — it would cause the sourcing shell to exit on any wrapper error, breaking the interactive session. Use `set -uo pipefail` for source scripts, and `set -euo pipefail` only for scripts that run independently in their own subshell.
 
-## Non-China Use Cases
+---
 
-This skill is useful whenever you need conditional proxy routing:
+## Troubleshooting
 
-- **Corporate VPN**: Auto-detect if internal sites need direct access
-- **Split-tunnel testing**: Compare latency between VPN and direct
-- **Multi-hop proxy chains**: Test each hop independently
-- **CI/CD pipelines**: Auto-switch proxy for geo-restricted dependencies
+**"netcheck: command not found"** — `source ~/.bash_aliases` or check `~/.local/bin` is in PATH.
+
+**MCP tool not appearing** — Restart Hermes after adding the config block. Check `pip install mcp` succeeded.
+
+**"curl error 28" on both routes** — Both direct and proxy are down. Check: 1) proxy service running? 2) site itself down? 3) DNS?
+
+**Proxy stays on after spip/sgclone** — Update your wrappers. v2 uses push/pop. Re-run `install.sh`.

@@ -102,30 +102,98 @@ done
 
 HOST=$(echo "$URL" | sed -E 's|^https?://([^/:]+).*|\1|')
 
+# ===== B. 路由表优先（跳过检测）=====
+ROUTE_HELPER="$HOME/.local/bin/netcheck-route"
+if [[ -x "$ROUTE_HELPER" ]]; then
+    ROUTE_ACTION=$("$ROUTE_HELPER" "$HOST" 2>/dev/null); route_exit=$?
+    # Exit code 2 = route table parse error (corrupted YAML)
+    if [[ $route_exit -eq 2 ]]; then
+        echo -e "${YELLOW}⚠ 路由表解析错误，跳过路由检测，进行实时检测...${RESET}" >&2
+    elif [[ "$ROUTE_ACTION" == "always_proxy" ]]; then
+        echo ""
+        echo -e "${CYAN}═══ netcheck: $HOST ═══${RESET}"
+        echo -e "  路由: ${YELLOW}命中规则 → 始终代理${RESET}"
+        echo -e "  代理: ${PROXY_URL_DETECTED}"
+        echo ""
+        echo -e "→ ${GREEN}建议: 开启代理${RESET}（路由表规则）"
+        echo -e "  设置: ${CYAN}export http_proxy=$PROXY_URL_DETECTED${RESET}"
+        echo ""
+        exit 0
+    elif [[ "$ROUTE_ACTION" == "always_direct" ]]; then
+        echo ""
+        echo -e "${CYAN}═══ netcheck: $HOST ═══${RESET}"
+        echo -e "  路由: ${GREEN}命中规则 → 始终直连${RESET}"
+        echo ""
+        echo -e "→ ${GREEN}建议: 保持直连${RESET}（路由表规则）"
+        echo ""
+        exit 0
+    fi
+    # "auto" or no match → proceed with live check
+fi
+
+# ── TCP 端口连通性检测（v3: 快速回退，纯 TCP，非 HTTP）──
+tcp_probe() {
+    local host="$1"
+    local port="${2:-443}"
+    local timeout="${3:-2}"
+    export TCP_HOST="$host" TCP_PORT="$port"
+    timeout "$timeout" bash -c 'echo >/dev/tcp/"$TCP_HOST"/"$TCP_PORT"' 2>/dev/null && return 0
+    python3 -c "
+import socket, sys, os
+s = socket.socket()
+s.settimeout(${timeout})
+try:
+    s.connect((os.environ['TCP_HOST'], int(os.environ['TCP_PORT'])))
+    s.close()
+except Exception:
+    sys.exit(1)
+" 2>/dev/null && return 0
+    return 1
+}
+
+# L1: TCP 端口探测（路由表未命中时快速判定）— 先443再80
+if tcp_probe "$HOST" 443 2 || tcp_probe "$HOST" 80 2; then
+    echo ""
+    echo -e "${CYAN}═══ netcheck: $HOST ═══${RESET}"
+    echo -e "  代理: ${PROXY_URL_DETECTED}"
+    echo ""
+    echo -e "  直连: ${GREEN}✓${RESET} TCP 可达"
+    echo ""
+    echo -e "→ ${GREEN}建议: 保持直连${RESET}（TCP 端口可达）"
+    echo ""
+    exit 0
+fi
+
 # ===== 单次检测 =====
 check_url() {
     local url="$1"
     local proxy_arg="$2"
     local label="$3"
 
-    local start_time end_time elapsed curl_exit
+    local start_time end_time elapsed http_code curl_exit
 
     start_time=$(date +%s.%N)
-    curl_exit=$(curl -s -o /dev/null -w "%{exitcode}" \
+    # Capture HTTP status via -w, exit code via $?
+    # Use set +e to prevent premature exit, then capture curl's real exit code
+    set +e
+    http_code=$(curl -s -o /dev/null -w "%{http_code}" \
         --max-time "$TIMEOUT" \
         --connect-timeout "$((TIMEOUT/2))" \
         -L \
         $proxy_arg \
-        "$url" 2>/dev/null || echo "28")
+        "$url" 2>/dev/null)
+    curl_exit=$?
+    set -e
     end_time=$(date +%s.%N)
 
     elapsed=$(echo "$end_time - $start_time" | bc 2>/dev/null || echo "0")
 
-    if [[ "$curl_exit" == "0" ]]; then
+    # curl exit 0 = connected successfully (site is reachable)
+    if [[ $curl_exit -eq 0 ]]; then
         echo "ok $elapsed"
     else
         local reason
-        case "$curl_exit" in
+        case $curl_exit in
             6)  reason="DNS 解析失败" ;;
             7)  reason="连接被拒绝" ;;
             28) reason="超时 (${TIMEOUT}s)" ;;
@@ -145,15 +213,22 @@ speed_test() {
     local label="$3"
 
     local speed_kbps curl_exit
-    curl_exit=$(curl -s -o /dev/null -w "%{speed_download}" \
+    set +e
+    speed_kbps=$(curl -s -o /dev/null -w "%{speed_download}" \
         --max-time "$TIMEOUT" \
         --connect-timeout "$((TIMEOUT/2))" \
         -L \
         --range 0-1048575 \
         $proxy_arg \
-        "$url" 2>/dev/null || echo "0")
+        "$url" 2>/dev/null)
+    curl_exit=$?
+    set -e
 
-    speed_kbps=$(echo "$curl_exit / 1024" | bc 2>/dev/null || echo "0")
+    if [[ $curl_exit -ne 0 ]]; then
+        echo "0"
+        return
+    fi
+    speed_kbps=$(echo "$speed_kbps / 1024" | bc 2>/dev/null || echo "0")
     echo "$speed_kbps"
 }
 

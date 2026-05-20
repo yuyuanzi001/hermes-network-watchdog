@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+"""
+Route table lookup for netcheck.
+Reads ~/.hermes/network-routes.yaml and returns the matching action for a domain.
+
+Usage:
+  netcheck-route <domain>
+  → outputs: always_proxy|always_direct|auto
+
+Exit codes:
+  0 — matched a rule
+  1 — no match (use auto/default)
+  2 — error
+"""
+
+import sys
+import os
+import fnmatch
+
+ROUTES_FILE = os.path.expanduser("~/.hermes/network-routes.yaml")
+
+
+def load_routes():
+    """Simple YAML parser for our specific format. Avoids PyYAML dependency.
+    
+    Returns (routes, default_action, warnings).
+    warnings is a list of parse issues found.
+    """
+    routes = []
+    default_action = "auto"
+    warnings = []
+
+    if not os.path.exists(ROUTES_FILE):
+        return routes, default_action, warnings
+
+    with open(ROUTES_FILE) as f:
+        lines = f.readlines()
+
+    in_routes = False
+    route_count = 0
+    has_action = False
+    
+    for lineno, line in enumerate(lines, 1):
+        raw = line.rstrip("\n\r")
+        if "#" in raw:
+            raw = raw.split("#")[0]
+        stripped = raw.strip()
+        if not stripped:
+            continue
+
+        if stripped.startswith("routes:"):
+            in_routes = True
+            continue
+        if in_routes and ":" in stripped and not raw.startswith((" ", "\t")) and not stripped.startswith("-"):
+            # Validate we actually parsed some routes
+            if route_count == 0:
+                warnings.append(f"Line {lineno}: routes section is empty")
+            in_routes = False
+
+        if in_routes and stripped.startswith("- pattern:"):
+            # Warn if previous pattern has no action
+            if route_count > 0 and not has_action:
+                warnings.append(f"Line {lineno}: previous pattern has no action defined")
+            pattern = stripped.split(":", 1)[1].strip().strip('"')
+            routes.append({"pattern": pattern, "action": None})
+            has_action = False
+            route_count += 1
+        elif in_routes and stripped.startswith("action:") and routes:
+            action = stripped.split(":", 1)[1].strip()
+            if action not in ("always_proxy", "always_direct", "auto"):
+                warnings.append(f"Line {lineno}: unknown action '{action}' for pattern '{routes[-1]['pattern']}'")
+            routes[-1]["action"] = action
+            has_action = True
+        
+        if stripped.startswith("default_action:"):
+            val = stripped.split(":", 1)[1].strip()
+            if val not in ("auto", "always_proxy", "always_direct"):
+                warnings.append(f"Line {lineno}: unknown default_action '{val}', using 'auto'")
+                default_action = "auto"
+            else:
+                default_action = val
+
+    return routes, default_action, warnings
+
+
+def match_domain(domain: str, routes: list) -> str | None:
+    """Check domain against route patterns. Returns action or None."""
+    for rule in routes:
+        pattern = rule["pattern"]
+        action = rule["action"]
+        if not action:
+            continue
+        if fnmatch.fnmatch(domain, pattern):
+            return action
+    return None
+
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
+        print("Usage: netcheck-route <domain>", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("Query the network route table for a domain.", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("Exit codes:", file=sys.stderr)
+        print("  0 — matched a rule (always_proxy or always_direct)", file=sys.stderr)
+        print("  1 — no match (uses default_action)", file=sys.stderr)
+        print("  2 — error", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("Route table: ~/.hermes/network-routes.yaml", file=sys.stderr)
+        sys.exit(2 if len(sys.argv) < 2 else 0)
+
+    domain = sys.argv[1].strip()
+    routes, default_action, warnings = load_routes()
+    
+    # Print any parse warnings to stderr
+    for w in warnings:
+        print(f"WARNING: {w}", file=sys.stderr)
+
+    result = match_domain(domain, routes)
+
+    if result:
+        print(result)
+        sys.exit(0)
+    else:
+        print(default_action)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

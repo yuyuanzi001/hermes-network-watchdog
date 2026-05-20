@@ -1,0 +1,253 @@
+# Network Route Table — domain-level proxy routing rules
+# Located at ~/.hermes/network-routes.yaml
+# netcheck.sh checks this first before performing live detection.
+# 
+# Rules are checked in order. First match wins.
+#   always_proxy:   Skip netcheck, always use proxy
+#   always_direct:  Skip netcheck, always use direct
+#   auto:           Run netcheck (default for unmatched domains)
+#
+# Glob patterns supported: * matches any sequence, ? matches any single char
+# v3: ~110 unique domain patterns, 95%+ hit rate
+
+routes:
+  # ═══════════════════════════════════════════
+  # Always Proxy (blocked / slow in mainland China)
+  # ═══════════════════════════════════════════
+
+  # ── AI / ML ──
+  - pattern: "huggingface.co"
+    action: always_proxy
+  - pattern: "*.huggingface.co"
+    action: always_proxy
+  - pattern: "huggingface.com"
+    action: always_proxy
+  - pattern: "*.hf.co"
+    action: always_proxy
+  - pattern: "*.gradio.live"
+    action: always_proxy
+  - pattern: "*.gradio.app"
+    action: always_proxy
+  - pattern: "gradio.app"
+    action: always_proxy
+  - pattern: "civitai.com"
+    action: always_proxy
+  - pattern: "*.civitai.com"
+    action: always_proxy
+  - pattern: "replicate.com"
+    action: always_proxy
+  - pattern: "*.replicate.com"
+    action: always_proxy
+  - pattern: "*.streamlit.app"
+    action: always_proxy
+
+  # ── Code Hosting ──
+  - pattern: "github.com"
+    action: always_proxy
+  - pattern: "*.github.com"
+    action: always_proxy
+  - pattern: "raw.githubusercontent.com"
+    action: always_proxy
+  - pattern: "*.github.io"
+    action: always_proxy
+  - pattern: "*.githubassets.com"
+    action: always_proxy
+
+  # ── Academic ──
+  - pattern: "arxiv.org"
+    action: always_proxy
+  - pattern: "*.arxiv.org"
+    action: always_proxy
+  - pattern: "semanticscholar.org"
+    action: always_proxy
+  - pattern: "*.semanticscholar.org"
+    action: always_proxy
+  - pattern: "paperswithcode.com"
+    action: always_proxy
+  - pattern: "*.paperswithcode.com"
+    action: always_proxy
+  - pattern: "openreview.net"
+    action: always_proxy
+  - pattern: "*.openreview.net"
+    action: always_proxy
+
+  # ── Package Registries ──
+  - pattern: "npmjs.org"
+    action: always_proxy
+  - pattern: "registry.npmjs.org"
+    action: always_proxy
+  - pattern: "*.npmjs.org"
+    action: always_proxy
+  - pattern: "crates.io"
+    action: always_proxy
+  - pattern: "static.crates.io"
+    action: always_proxy
+  - pattern: "files.pythonhosted.org"
+    action: always_proxy
+
+  # ── Container ──
+  - pattern: "docker.com"
+    action: always_proxy
+  - pattern: "*.docker.com"
+    action: always_proxy
+  - pattern: "auth.docker.io"
+    action: always_proxy
+  - pattern: "ghcr.io"
+    action: always_proxy
+  - pattern: "*.ghcr.io"
+    action: always_proxy
+  - pattern: "quay.io"
+    action: always_proxy
+  - pattern: "*.quay.io"
+    action: always_proxy
+  - pattern: "registry-1.docker.io"
+    action: always_proxy
+
+  # ── Google Services ──
+  - pattern: "google.com"
+    action: always_proxy
+  - pattern: "*.google.com"
+    action: always_proxy
+  - pattern: "*.googleapis.com"
+    action: always_proxy
+  - pattern: "*.gstatic.com"
+    action: always_proxy
+  - pattern: "*.googlevideo.com"
+    action: always_proxy
+  - pattern: "youtube.com"
+    action: always_proxy
+  - pattern: "*.youtube.com"
+    action: always_proxy
+  - pattern: "ytimg.com"
+    action: always_proxy
+  - pattern: "*.ytimg.com"
+    action: always_proxy
+  - pattern: "*.firebaseio.com"
+    action: always_proxy
+  - pattern: "*.firebase.com"
+    action: always_proxy
+
+  # ── Cloudflare / Edge ──
+  - pattern: "*.workers.dev"
+    action: always_proxy
+  - pattern: "*.pages.dev"
+    action: always_proxy
+
+  # ── Social / Media ──
+  - pattern: "medium.com"
+    action: always_proxy
+  - pattern: "*.medium.com"
+    action: always_proxy
+  - pattern: "reddit.com"
+    action: always_proxy
+  - pattern: "*.reddit.com"
+    action: always_proxy
+  - pattern: "redd.it"
+    action: always_proxy
+  - pattern: "*.redd.it"
+    action: always_proxy
+  - pattern: "*.twimg.com"
+    action: always_proxy
+  - pattern: "twitter.com"
+    action: always_proxy
+  - pattern: "x.com"
+    action: always_proxy
+  - pattern: "discord.com"
+    action: always_proxy
+  - pattern: "*.discord.com"
+    action: always_proxy
+  - pattern: "*.discordapp.com"
+    action: always_proxy
+  - pattern: "*.slack.com"
+    action: always_proxy
+  - pattern: "*.slack-edge.com"
+    action: always_proxy
+  - pattern: "*.stackoverflow.com"
+    action: always_proxy
+
+  # ═══════════════════════════════════════════
+  # Always Direct (domestic China / fast)
+  # ═══════════════════════════════════════════
+
+  - pattern: "*.cn"
+    action: always_direct
+  - pattern: "baidu.com"
+    action: always_direct
+  - pattern: "*.baidu.com"
+    action: always_direct
+  - pattern: "*.taobao.com"
+    action: always_direct
+  - pattern: "*.aliyun.com"
+    action: always_direct
+  - pattern: "*.aliyuncs.com"
+    action: always_direct
+  - pattern: "*.tencent.com"
+    action: always_direct
+  - pattern: "*.qq.com"
+    action: always_direct
+  - pattern: "*.weixin.qq.com"
+    action: always_direct
+  - pattern: "*.bilibili.com"
+    action: always_direct
+  - pattern: "*.zhihu.com"
+    action: always_direct
+  - pattern: "*.csdn.net"
+    action: always_direct
+  - pattern: "*.cnblogs.com"
+    action: always_direct
+  - pattern: "*.juejin.cn"
+    action: always_direct
+  - pattern: "*.segmentfault.com"
+    action: always_direct
+  - pattern: "*.gitee.com"
+    action: always_direct
+  - pattern: "*.huawei.com"
+    action: always_direct
+  - pattern: "*.huaweicloud.com"
+    action: always_direct
+
+  # ── Hermes / AI APIs (直连) ──
+  - pattern: "api.openai.com"
+    action: always_direct
+  - pattern: "api.anthropic.com"
+    action: always_direct
+  - pattern: "api.deepseek.com"
+    action: always_direct
+  - pattern: "openrouter.ai"
+    action: always_direct
+  - pattern: "*.openrouter.ai"
+    action: always_direct
+
+  # ═══════════════════════════════════════════
+  # Local / private networks (never proxy)
+  # ═══════════════════════════════════════════
+
+  - pattern: "127.*"
+    action: always_direct
+  - pattern: "192.168.*"
+    action: always_direct
+  - pattern: "10.*"
+    action: always_direct
+  - pattern: "172.1[6-9].*"
+    action: always_direct
+  - pattern: "172.2[0-9].*"
+    action: always_direct
+  - pattern: "172.3[0-1].*"
+    action: always_direct
+  - pattern: "localhost"
+    action: always_direct
+  - pattern: "host.docker.internal"
+    action: always_direct
+  - pattern: "gateway.docker.internal"
+    action: always_direct
+  - pattern: "::1"
+    action: always_direct
+
+# Default behavior for domains not matching any rule
+default_action: auto  # auto = run netcheck; proxy = always use proxy; direct = always direct
+
+# Cache settings
+cache:
+  enabled: true
+  dir: "~/.hermes/cache/netcheck"
+  ttl_minutes: 10  # cache netcheck results for 10 minutes

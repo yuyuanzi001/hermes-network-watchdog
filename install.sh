@@ -1,51 +1,155 @@
-#!/bin/bash
-# Hermes Network Watchdog — One-line installer
-# curl -sL https://raw.githubusercontent.com/yuyuanzi001/hermes-network-watchdog/main/install.sh | bash
+#!/usr/bin/env bash
+# network-proxy-watchdog — one-click install
+# Run from the skill directory or any path:
+#   bash ~/.hermes/skills/devops/network-proxy-watchdog/install.sh
+# Or directly:
+#   curl -sL <url>/install.sh | bash
+set -euo pipefail
 
-set -e
+SKILL_DIR="$(cd "$(dirname "$0")" && pwd)"
+BIN_DIR="$HOME/.local/bin"
+HERMES_DIR="$HOME/.hermes"
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'; RESET='\033[0m'
-REPO="https://raw.githubusercontent.com/yuyuanzi001/hermes-network-watchdog/main"
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+RESET='\033[0m'
 
-echo -e "${CYAN}═══ Hermes Network Watchdog Installer ═══${RESET}"
+echo -e "${CYAN}═══════════════════════════════════════${RESET}"
+echo -e "${CYAN}  network-proxy-watchdog installer${RESET}"
+echo -e "${CYAN}═══════════════════════════════════════${RESET}"
 echo ""
 
-# 1. Install netcheck script
-echo "→ Installing netcheck..."
-mkdir -p ~/.local/bin
-curl -sL "$REPO/scripts/netcheck.sh" -o ~/.local/bin/netcheck
-chmod +x ~/.local/bin/netcheck
+# ── Step 1: Install executables ──
+echo -e "${YELLOW}[1/4] Installing netcheck executables...${RESET}"
+mkdir -p "$BIN_DIR"
 
-# Add to PATH if not already
-if ! echo "$PATH" | grep -q ".local/bin"; then
-    echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-    export PATH="$HOME/.local/bin:$PATH"
+# netcheck — check if already a symlink to our script
+SRC_NETCHECK="$SKILL_DIR/scripts/netcheck.sh"
+DST_NETCHECK="$BIN_DIR/netcheck"
+if [[ -L "$DST_NETCHECK" ]] && [[ "$(readlink -f "$DST_NETCHECK")" == "$(readlink -f "$SRC_NETCHECK")" ]]; then
+    echo -e "  ${GREEN}✓${RESET} netcheck already linked to skill dir"
+else
+    cp "$SRC_NETCHECK" "$DST_NETCHECK"
+    chmod +x "$DST_NETCHECK"
+    echo -e "  ${GREEN}✓${RESET} netcheck installed"
 fi
 
-# 2. Install smart wrappers
-echo "→ Installing smart wrappers..."
-WRAPPERS_LINE='source <(curl -sL '"$REPO/scripts/smart_wrappers.sh"')'
-if ! grep -q "smart_wrappers" ~/.bashrc 2>/dev/null; then
-    echo "$WRAPPERS_LINE" >> ~/.bashrc
+# netcheck-route
+cp "$SKILL_DIR/scripts/netcheck-route" "$BIN_DIR/netcheck-route"
+chmod +x "$BIN_DIR/netcheck-route"
+echo -e "  ${GREEN}✓${RESET} netcheck-route installed"
+
+# v3: agent-check
+cp "$SKILL_DIR/scripts/agent-check.sh" "$BIN_DIR/agent-check"
+chmod +x "$BIN_DIR/agent-check"
+echo -e "  ${GREEN}✓${RESET} agent-check installed"
+
+# v3: proxy-heartbeat
+cp "$SKILL_DIR/scripts/proxy-heartbeat.sh" "$BIN_DIR/proxy-heartbeat"
+chmod +x "$BIN_DIR/proxy-heartbeat"
+echo -e "  ${GREEN}✓${RESET} proxy-heartbeat installed"
+
+# v3: wake-guard
+cp "$SKILL_DIR/scripts/wake-guard.sh" "$BIN_DIR/wake-guard"
+chmod +x "$BIN_DIR/wake-guard"
+echo -e "  ${GREEN}✓${RESET} wake-guard installed"
+
+# Ensure BIN_DIR in PATH
+if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
+    echo "export PATH=\"$BIN_DIR:\$PATH\"" >> "$HOME/.bashrc"
+    export PATH="$BIN_DIR:$PATH"
+    echo -e "  ${GREEN}✓${RESET} Added $BIN_DIR to PATH"
+fi
+echo -e "  ${GREEN}✓${RESET} netcheck + netcheck-route installed"
+
+# ── Step 2: Route table ──
+echo -e "${YELLOW}[2/4] Installing route table...${RESET}"
+ROUTES_FILE="$HERMES_DIR/network-routes.yaml"
+if [[ -f "$ROUTES_FILE" ]]; then
+    echo -e "  ${YELLOW}⚠${RESET}  $ROUTES_FILE already exists, skipping"
+    echo "     (delete it first if you want a fresh copy)"
+else
+    cp "$SKILL_DIR/templates/network-routes.yaml" "$ROUTES_FILE"
+    echo -e "  ${GREEN}✓${RESET} Route table installed: $ROUTES_FILE"
 fi
 
-# 3. Install Hermes tool (if Hermes exists)
-if command -v hermes &>/dev/null; then
-    echo "→ Installing Hermes Agent tool..."
-    mkdir -p ~/.hermes/tools
-    curl -sL "$REPO/tools/netcheck.py" -o ~/.hermes/tools/netcheck.py
+# ── Step 3: MCP server (optional) ──
+echo -e "${YELLOW}[3/4] MCP server setup...${RESET}"
+MCP_SRC="$SKILL_DIR/scripts/netcheck_mcp_server.py"
+MCP_DST="$HERMES_DIR/tools/netcheck_mcp_server.py"
+
+mkdir -p "$HERMES_DIR/tools"
+cp "$MCP_SRC" "$MCP_DST"
+chmod +x "$MCP_DST"
+echo -e "  ${GREEN}✓${RESET} MCP server: $MCP_DST"
+
+# Check if mcp package is installed
+if ! python3 -c "import mcp" 2>/dev/null; then
+    echo -e "  ${YELLOW}⚠${RESET}  Python 'mcp' package not found, installing..."
+    pip install mcp --break-system-packages 2>/dev/null || pip install mcp 2>/dev/null || {
+        echo -e "  ${YELLOW}⚠${RESET}  Could not install 'mcp'. MCP tool won't work."
+        echo "     Install manually: pip install mcp"
+    }
 fi
 
+# Check if MCP server already registered in config.yaml
+CONFIG_FILE="$HERMES_DIR/config.yaml"
+if [[ -f "$CONFIG_FILE" ]]; then
+    if grep -q "netcheck_mcp_server" "$CONFIG_FILE" 2>/dev/null; then
+        echo -e "  ${YELLOW}⚠${RESET}  MCP server already in config.yaml, skipping"
+    else
+        echo ""
+        echo -e "  ${YELLOW}To register the MCP tool, add this to ~/.hermes/config.yaml:${RESET}"
+        echo ""
+        echo "    mcp_servers:"
+        echo "      netcheck:"
+        echo '        command: "python3"'
+        echo '        args: ["'"$MCP_DST"'"]'
+        echo "        timeout: 30"
+        echo "        connect_timeout: 10"
+        echo ""
+        echo -e "  Then restart Hermes. Without MCP, the agent can still use"
+        echo -e "  'terminal' to run 'netcheck <domain>' directly."
+    fi
+else
+    echo -e "  ${YELLOW}⚠${RESET}  No config.yaml found. Create one with 'hermes setup' first."
+fi
+
+# ── Step 4: Bash functions ──
+echo -e "${YELLOW}[4/4] Installing bash functions...${RESET}"
+BASH_ALIASES="$HOME/.bash_aliases"
+INSTALL_MARKER="# >>> network-proxy-watchdog (auto-installed)"
+
+# Install the standalone wrapper script so bash_aliases just sources it
+SMART_WRAPPERS_DST="$BIN_DIR/smart_wrappers.sh"
+cp "$SKILL_DIR/scripts/smart_wrappers.sh" "$SMART_WRAPPERS_DST"
+chmod +x "$SMART_WRAPPERS_DST"
+
+if [[ -f "$BASH_ALIASES" ]] && grep -qF "$INSTALL_MARKER" "$BASH_ALIASES" 2>/dev/null; then
+    echo -e "  ${YELLOW}⚠${RESET}  Functions already in ~/.bash_aliases, skipping"
+else
+    cat >> "$BASH_ALIASES" << BASHEOF
+
+# >>> network-proxy-watchdog (auto-installed)
+source "$SMART_WRAPPERS_DST"
+alias netcheck='PATH="\$HOME/.local/bin:\$PATH" netcheck'
+alias proxy-ping='proxy-heartbeat --once'
+# <<< network-proxy-watchdog
+BASHEOF
+    echo -e "  ${GREEN}✓${RESET} Added source line to ~/.bash_aliases"
+    echo -e "  ${YELLOW}  Run 'source ~/.bash_aliases' to activate now${RESET}"
+fi
+
+# ── Done ──
 echo ""
-echo -e "${GREEN}✓ Installation complete!${RESET}"
+echo -e "${GREEN}═══════════════════════════════════════${RESET}"
+echo -e "${GREEN}  Installation complete!${RESET}"
 echo ""
-echo "Quick start:"
-echo "  source ~/.bashrc"
-echo "  netcheck https://github.com"
-echo "  proxy on"
-echo "  spip install transformers"
+echo "  Quick test:"
+echo "    source ~/.bash_aliases"
+echo "    netcheck huggingface.co"
 echo ""
-echo "Configure proxy (if not using default Clash on 7897):"
-echo "  PROXY_PORT=1080 proxy on        # v2ray / SSR"
-echo "  PROXY_URL=socks5://127.0.0.1:1080 proxy on   # SOCKS5"
-echo -e "  ${CYAN}See README:${RESET} $REPO/README.md"
+echo "  For Hermes MCP integration, add the config block"
+echo "  shown above and restart Hermes."
+echo -e "${GREEN}═══════════════════════════════════════${RESET}"
